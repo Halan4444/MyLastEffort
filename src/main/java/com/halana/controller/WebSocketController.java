@@ -1,0 +1,113 @@
+package com.halana.controller;
+
+import com.halana.model.board.BoardResponse;
+import com.halana.model.comment.Comment;
+import com.halana.model.notification.Notification;
+import com.halana.model.status.StatusResponse;
+import com.halana.model.task.Task;
+import com.halana.model.user.User;
+import com.halana.service.board.IBoardService;
+import com.halana.service.comment.ICommentService;
+import com.halana.service.notification.INotificationService;
+import com.halana.service.status.IStatusService;
+import com.halana.service.task.ITaskService;
+import com.halana.service.user.IUserService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.messaging.handler.annotation.DestinationVariable;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.SendTo;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.text.Format;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.List;
+import java.util.Set;
+
+@RestController
+@CrossOrigin("*")
+public class WebSocketController {
+
+    @Autowired
+    private IBoardService boardService;
+
+    @Autowired
+    private ITaskService taskService;
+
+    @Autowired
+    private IStatusService statusService;
+
+    @Autowired
+    private INotificationService notificationService;
+
+    @Autowired
+    private IUserService userService;
+
+    @Autowired
+    private ICommentService commentService;
+
+    @Autowired
+    private SimpMessagingTemplate simpMessagingTemplate;
+
+    @MessageMapping("/task/board/{id}")
+    @SendTo("/topic/task/board/{id}")
+    public BoardResponse boardSocket(@DestinationVariable Long id, BoardResponse boardResponse) {
+        boardService.saveBoardResponse(boardResponse, boardResponse.getProject());
+        Set<StatusResponse> statuses = boardResponse.getStatuses();
+        for( StatusResponse statusResponse : statuses) {
+            statusService.saveStatusResponse(statusResponse, boardResponse.getId());
+            for(Task task : statusResponse.getTasks()) {
+                taskService.save(task);
+            }
+         }
+        return boardService.findBoardById(id);
+    }
+
+    @MessageMapping("/notification/board/{id}")
+    public void notificationSocket(@DestinationVariable Long id, Notification notification) {
+        List<User> userList = userService.findAllByBoardId(id);
+        for(User user : userList) {
+            if(user.getId() != notification.getSender().getId()) {
+                Notification newNotification = new Notification();
+                newNotification.setSender(notification.getSender());
+                newNotification.setAction(notification.getAction());
+                newNotification.setDate(convertDateToString(new Date()));
+                newNotification.setReceiver(user);
+                newNotification.setStatus(false);
+                newNotification.setLink(notification.getLink());
+                notificationService.save(newNotification);
+                simpMessagingTemplate.convertAndSend("/topic/notification/board/user/"+user.getId(), notificationService.findAllByReceiverIdOrderByIdDesc(user.getId()));
+            }
+        }
+    }
+
+    @MessageMapping("/notification/one")
+    public void notiOneSocket( Notification notification) {
+        User user = userService.findByEmail(notification.getReceiver().getEmail()).get();
+        Notification newNotification = new Notification();
+        newNotification.setSender(notification.getSender());
+        newNotification.setAction(notification.getAction());
+        newNotification.setDate(convertDateToString(new Date()));
+        newNotification.setReceiver(user);
+        newNotification.setStatus(false);
+        newNotification.setLink(notification.getLink());
+        notificationService.save(newNotification);
+        simpMessagingTemplate.convertAndSend("/topic/notification/board/user/"+user.getId(), notificationService.findAllByReceiverIdOrderByIdDesc(user.getId()));
+    }
+
+    @MessageMapping("/comment/task/{id}")
+    @SendTo("/topic/comment/task/{id}")
+    public List<Comment> commentSocket(@DestinationVariable Long id, Comment comment) {
+        comment.setDate(convertDateToString(new Date()));
+        commentService.save(comment);
+        return commentService.findAllByTaskId(id);
+    }
+
+
+    private String convertDateToString(Date date) {
+        Format formatter = new SimpleDateFormat("yyyy-MM-dd HH:mm");
+        return formatter.format(date);
+    }
+}
